@@ -12,6 +12,7 @@ import sys
 import argparse
 import requests
 import json
+import readline
 from typing import Optional, Dict, Any, List
 
 # Try to import OpenAI and Google Gemini libraries
@@ -171,6 +172,11 @@ class autohack:
         os.makedirs(self.workflows_dir, exist_ok=True)
         self.workflows = self._load_workflows()
         self._init_predefined_workflows()
+        
+        # Command history
+        self.history_file = os.path.join(os.path.expanduser("~"), ".autohack", "history.txt")
+        os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
+        self._setup_history()
     
     def _initialize_clients(self):
         """Initialize AI model clients"""
@@ -271,6 +277,74 @@ class autohack:
                 except Exception as e:
                     print_error(f"Error saving predefined workflow {workflow_name}: {e}")
     
+    def _setup_history(self):
+        """Setup command history and auto-completion"""
+        # Set history file
+        readline.set_history_length(1000)  # Limit history to 1000 entries
+        
+        # Load history if file exists
+        if os.path.exists(self.history_file):
+            try:
+                readline.read_history_file(self.history_file)
+            except Exception as e:
+                print_error(f"Error loading history: {e}")
+        
+        # Setup auto-completion
+        readline.parse_and_bind('tab: complete')
+        readline.set_completer(self._completer)
+        
+        # Save history on exit
+        import atexit
+        atexit.register(self._save_history)
+    
+    def _completer(self, text, state):
+        """Command auto-completion function"""
+        # List of available commands
+        commands = [
+            "runlocal", "runclaude", "model", "models", "workflows",
+            "runworkflow", "createworkflow", "deleteworkflow", "menu",
+            "quit", "exit", "clear"
+        ]
+        
+        # Get available models
+        model_names = [model_name for model_name, model_info in self.models.items() if model_info["available"]]
+        
+        # Get available workflows
+        workflow_names = list(self.workflows.keys())
+        
+        # Split the current input to determine what to complete
+        line = readline.get_line_buffer()
+        parts = line.split()
+        
+        # If no parts yet, complete commands
+        if not parts:
+            matches = [cmd for cmd in commands if cmd.startswith(text)]
+        else:
+            # If first part is a command, complete based on command
+            first_part = parts[0]
+            if first_part == "model":
+                # Complete model names
+                matches = [model for model in model_names if model.startswith(text)]
+            elif first_part == "runworkflow" or first_part == "deleteworkflow":
+                # Complete workflow names
+                matches = [wf for wf in workflow_names if wf.startswith(text)]
+            else:
+                # For other commands, complete with commands that start with text
+                matches = [cmd for cmd in commands if cmd.startswith(text)]
+        
+        # Return the state-th match
+        if state < len(matches):
+            return matches[state]
+        else:
+            return None
+    
+    def _save_history(self):
+        """Save command history to file"""
+        try:
+            readline.write_history_file(self.history_file)
+        except Exception as e:
+            print_error(f"Error saving history: {e}")
+    
     def _save_workflow(self, name: str, workflow_data: Dict[str, Any]):
         """Save workflow to file"""
         try:
@@ -350,6 +424,148 @@ class autohack:
         except Exception as e:
             print_error(f"Error deleting workflow {name}: {e}")
             return f"Error deleting workflow '{name}'"
+    
+    def show_menu(self):
+        """Show interactive menu"""
+        while True:
+            os.system('clear' if os.name == 'posix' else 'cls')
+            
+            print(f"\n{Colors.BOLD}{Colors.GREEN}{'╔'+'═'*70+'╗'}{Colors.RESET}")
+            print(f"{Colors.BOLD}{Colors.GREEN}║{Colors.RESET}  {Colors.BOLD}{Colors.CYAN}⚡ autohack - Interactive Menu ⚡{Colors.RESET}         {Colors.BOLD}{Colors.GREEN}║{Colors.RESET}")
+            print(f"{Colors.BOLD}{Colors.GREEN}╠{'═'*70+'╣'}{Colors.RESET}")
+            print(f"{Colors.BOLD}{Colors.GREEN}║{Colors.RESET}  {Colors.BOLD}{Colors.PURPLE}🤖 Current Model: {self.models[self.current_model]['name']}{Colors.RESET}           {Colors.BOLD}{Colors.GREEN}║{Colors.RESET}")
+            print(f"{Colors.BOLD}{Colors.GREEN}╚{'═'*70+'╝'}{Colors.RESET}")
+            
+            print_section("Main Menu")
+            
+            menu_options = [
+                ("1", "Execute a command locally", "runlocal"),
+                ("2", "Execute command with AI analysis", "runclaude"),
+                ("3", "Switch AI model", "model"),
+                ("4", "List available AI models", "models"),
+                ("5", "List available workflows", "workflows"),
+                ("6", "Run a workflow", "runworkflow"),
+                ("7", "Create a new workflow", "createworkflow"),
+                ("8", "Delete a workflow", "deleteworkflow"),
+                ("9", "Clear conversation history", "clear"),
+                ("0", "Exit autohack", "exit")
+            ]
+            
+            for option in menu_options:
+                print(f"  {Colors.BOLD}{Colors.YELLOW}{option[0]}{Colors.RESET}. {option[1]}")
+            
+            print_divider()
+            choice = input(f"{Colors.BOLD}{Colors.BLUE}Enter your choice (0-9):{Colors.RESET} ").strip()
+            
+            if choice == "0":
+                print(f"\n{Colors.GREEN}👋 Exiting autohack. Every command teaches. Every mistake refines! 🔐{Colors.RESET}\n")
+                sys.exit(0)
+            
+            selected_option = None
+            for option in menu_options:
+                if option[0] == choice:
+                    selected_option = option
+                    break
+            
+            if not selected_option:
+                print_error("Invalid choice. Please try again.")
+                input("Press Enter to continue...")
+                continue
+            
+            # Handle menu option
+            if selected_option[2] == "runlocal":
+                command = input(f"{Colors.BOLD}{Colors.BLUE}Enter command to execute:{Colors.RESET} ").strip()
+                if command:
+                    if self.mcp and self.mcp.enabled:
+                        result = self.run_command(command)
+                        print(f"\n{Colors.BOLD}Output:{Colors.RESET}\n{result}")
+                    else:
+                        print_error("MCP not connected. Cannot execute commands.")
+            
+            elif selected_option[2] == "runclaude":
+                command = input(f"{Colors.BOLD}{Colors.BLUE}Enter command to execute:{Colors.RESET} ").strip()
+                if command:
+                    if self.mcp and self.mcp.enabled:
+                        print_tool(f"Executing: {command}")
+                        result = self.run_command(command)
+                        print(f"\n{Colors.BOLD}Command Output:{Colors.RESET}")
+                        print(result)
+                        print("")
+                        enhanced_prompt = (
+                            f"I just executed this command on my Kali Linux system:\n\n"
+                            f"Command: {command}\n\n"
+                            f"Output:\n{result}\n\n"
+                            f"Please provide your analysis in sections:\n"
+                            f"1. Summary of findings\n"
+                            f"2. Key insights and observations\n"
+                            f"3. Security implications (if any)\n"
+                            f"4. Recommendations or next steps"
+                        )
+                        response = self.chat(enhanced_prompt)
+                        print_ai(response, self.models[self.current_model]['name'])
+                    else:
+                        print_error("MCP not connected. Cannot execute commands.")
+            
+            elif selected_option[2] == "model":
+                print_info("Available models: claude, gpt, gemini")
+                model = input(f"{Colors.BOLD}{Colors.BLUE}Enter model name:{Colors.RESET} ").strip().lower()
+                if model in self.models:
+                    if self.models[model]["available"]:
+                        self.current_model = model
+                        self.conversation = []
+                        print_success(f"Switched to {self.models[model]['name']} model")
+                    else:
+                        print_error(f"{self.models[model]['name']} model is not available. Check API key.")
+                else:
+                    print_error(f"Invalid model. Available models: {', '.join(self.models.keys())}")
+            
+            elif selected_option[2] == "models":
+                print(f"\n{Colors.BOLD}Available AI Models:{Colors.RESET}")
+                for model_name, model_info in self.models.items():
+                    status = "✓" if model_info["available"] else "✗"
+                    print(f"  • {model_name}: {model_info['name']} [{status}]")
+                print(f"\nCurrent model: {self.current_model} ({self.models[self.current_model]['name']})")
+            
+            elif selected_option[2] == "workflows":
+                print(self.list_workflows())
+            
+            elif selected_option[2] == "runworkflow":
+                workflow_name = input(f"{Colors.BOLD}{Colors.BLUE}Enter workflow name:{Colors.RESET} ").strip()
+                if workflow_name in self.workflows:
+                    workflow = self.workflows[workflow_name]
+                    variables = {}
+                    for var in workflow.get("variables", []):
+                        value = input(f"{Colors.BOLD}{Colors.BLUE}Enter value for {var}:{Colors.RESET} ").strip()
+                        variables[var] = value
+                    result = self.run_workflow(workflow_name, variables)
+                    print(result)
+                else:
+                    print_error(f"Workflow '{workflow_name}' not found")
+            
+            elif selected_option[2] == "createworkflow":
+                workflow_name = input(f"{Colors.BOLD}{Colors.BLUE}Enter workflow name:{Colors.RESET} ").strip()
+                if workflow_name in self.workflows:
+                    print_error(f"Workflow '{workflow_name}' already exists")
+                else:
+                    print_info("Enter workflow JSON (e.g.: {\"name\": \"Test\", \"description\": \"Test workflow\", \"steps\": [{\"command\": \"echo test\", \"description\": \"Test step\"}], \"variables\": []}")
+                    json_input = input(f"{Colors.BOLD}{Colors.BLUE}Enter JSON:{Colors.RESET} ").strip()
+                    try:
+                        workflow_data = json.loads(json_input)
+                        result = self.create_workflow(workflow_name, workflow_data)
+                        print(result)
+                    except json.JSONDecodeError:
+                        print_error("Invalid JSON format")
+            
+            elif selected_option[2] == "deleteworkflow":
+                workflow_name = input(f"{Colors.BOLD}{Colors.BLUE}Enter workflow name to delete:{Colors.RESET} ").strip()
+                result = self.delete_workflow(workflow_name)
+                print(result)
+            
+            elif selected_option[2] == "clear":
+                self.conversation = []
+                print_success("Conversation cleared.")
+            
+            input("\nPress Enter to return to menu...")
         
     def detect_command_request(self, text: str) -> Optional[str]:
         """Detect if user is asking to run a command"""
@@ -496,6 +712,7 @@ class autohack:
             ("runworkflow <name> <var1=value1>", "Run a workflow with variables"),
             ("createworkflow <name> <json>", "Create a new workflow"),
             ("deleteworkflow <name>", "Delete a workflow"),
+            ("menu", "Show interactive menu"),
             ("quit or exit", "Leave autohack"),
             ("clear", "Clear conversation history")
         ]
@@ -633,6 +850,11 @@ class autohack:
                     workflow_name = parts[1]
                     result = self.delete_workflow(workflow_name)
                     print(result)
+                    continue
+                
+                # Show interactive menu
+                if user_input.lower() == 'menu':
+                    self.show_menu()
                     continue
                 
                 if user_input.lower() in ['quit', 'exit', 'q']:
